@@ -1,2 +1,2 @@
 streamlit
-git+https://julio-romero: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@github.com/fractalriver/toolkit.git@v3.0#egg=toolkit[all]
+git+https://nicomedrano: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@github.com/fractalriver/toolkit.git@v3.0#egg=toolkit[all]
