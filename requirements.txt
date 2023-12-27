@@ -1,3 +1,3 @@
 boto3==1.26.165
 streamlit
-git+https://nicomedrano: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@github.com/fractalriver/toolkit.git@v3.0#egg=toolkit[all]
+git+https://${GITHUB_USER}:${GITHUB_TOKEN}@github.com/fractalriver/toolkit.git@v3.0#egg=toolkit[all]
