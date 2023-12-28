@@ -10,16 +10,17 @@ Functions:
     main: The main function of the application.
 """
 
+import os
 import json
 import streamlit as st
+import gspread
+from google.oauth2 import service_account
 import boto3
-from toolkit.env import EnvironmentVariableManager
-from toolkit.googlesheets import open_google_sheets_client
-from toolkit.snowflakedb import SnowflakeDB
+from snowflake.snowpark import Session
 
-AWS_ACCESS_ID = EnvironmentVariableManager().getenv("AWS_ACCESS_ID")
-AWS_ACCESS_KEY = EnvironmentVariableManager().getenv("AWS_ACCESS_KEY")
-AWS_REGION = EnvironmentVariableManager().getenv("SECRETS_AWS_REGION")
+AWS_ACCESS_ID = os.getenv("AWS_ACCESS_ID")
+AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY")
+AWS_REGION = os.getenv("SECRETS_AWS_REGION")
 
 SNOWSQL_ACCOUNT = None
 SNOWSQL_USER = None
@@ -30,7 +31,8 @@ GC_SERVICE_ACCOUNT_CREDENTIALS = None
 
 
 def update_secrets(secret_manager) -> None:
-    """update necessary credentials from AWS Secrets Manager.
+    """
+    Update necessary credentials from AWS Secrets Manager.
 
     Parameters:
         secret_manager: AWS Secrets Manager object
@@ -50,9 +52,40 @@ def update_secrets(secret_manager) -> None:
     global SNOWSQL_WAREHOUSE
     SNOWSQL_WAREHOUSE = secret["SNOWSQL_WAREHOUSE"]
     global GC_SERVICE_ACCOUNT_CREDENTIALS
-    GC_SERVICE_ACCOUNT_CREDENTIALS = json.loads(
-        secret["GC_SERVICE_ACCOUNT_CREDENTIALS"]
+    GC_SERVICE_ACCOUNT_CREDENTIALS = secret["GC_SERVICE_ACCOUNT_CREDENTIALS"]
+
+
+def get_snowflake_session(account, user, pwd):
+    connection_parameters = {"account": account, "user": user, "password": pwd}
+    return Session.builder.configs(connection_parameters).create()
+
+
+def get_df_from_sql(session, query):
+    return session.sql(query)
+
+
+def open_google_sheets_client(google_sheets_json_key: str) -> gspread.Client:
+    """
+    Open a Google Sheet client.
+
+    Documentation on setting up a new project here:
+        https://gspread.readthedocs.io/en/latest/oauth2.html#enable-api-access-for-a-project. The project will need
+        to have Google Drive API enabled.
+
+    Args:
+        google_sheets_json_key(str): Authorization JSON to access the requested spreadsheets.
+
+    Returns: client(gspread.Client): API access to Google Sheets.
+    """
+    scope = [
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    creds = service_account.Credentials.from_service_account_info(
+        json.loads(google_sheets_json_key), scopes=scope
     )
+    client = gspread.authorize(creds)
+    return client
 
 
 def save_survey_data_to_google_sheets(survey_data, spreadsheet_url):
@@ -65,10 +98,7 @@ def save_survey_data_to_google_sheets(survey_data, spreadsheet_url):
     Returns:
         None
     """
-    gsheets_service_account = EnvironmentVariableManager().getenv(
-        "GC_SERVICE_ACCOUNT_CREDENTIALS"
-    )
-    client = open_google_sheets_client(gsheets_service_account)
+    client = open_google_sheets_client(GC_SERVICE_ACCOUNT_CREDENTIALS)
     sh = client.open_by_url(spreadsheet_url)
     worksheet = sh.worksheet("Data Dictionary")
     survey_data.fillna(0, inplace=True)
@@ -88,13 +118,12 @@ def main():
     secret = awsSession.client("secretsmanager", region_name=AWS_REGION)
     update_secrets(secret)
     st.title("Data Dictionary Generator")
-    conn = SnowflakeDB()
+    snowSession = get_snowflake_session(SNOWSQL_ACCOUNT, SNOWSQL_USER, SNOWSQL_PWD)
     survey_id = st.text_input("Enter the Survey ID")
     spreadsheet_name = st.text_input("Enter the Survey Notebook URL")
     query = f"select * from dw_prod.reporting.data_dictionary where survey_id = '{survey_id}'"
     if len(survey_id) > 0:
-        conn.connect()
-        survey_data = conn.get_pandas_dataframe(query)
+        survey_data = get_df_from_sql(snowSession, query).to_pandas()
         st.dataframe(survey_data)
         gsheets = st.button("Save the Data Dictionary into the Survey Notebook")
         if gsheets:
